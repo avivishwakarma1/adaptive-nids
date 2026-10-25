@@ -1,0 +1,13 @@
+{
+  "_comment": "TrainingConfig without model_version (the script sets it). Values are starting points, not tuned results.",
+  "split": {"strategy": "stratified", "train_fraction": 0.6, "validation_fraction": 0.2, "test_fraction": 0.2, "seed": 20260101, "dedupe": "model_features"},
+  "preprocessing": {"min_category_count": 5, "max_categories_per_column": 50},
+  "classifier": {"kind": "random_forest", "seed": 20260101, "n_estimators": 200, "min_samples_leaf": 2},
+  "anomaly": {"seed": 20260101, "n_estimators": 200, "max_samples": 256, "target_false_positive_rate": 0.05},
+  "risk_policy": {"policy_version": "risk-policy-1.0.0", "class_weights": {}, "default_attack_weight": 0.7,
+                  "w_conf": 0.7, "w_anom": 0.3, "anomaly_only_weight": 0.75, "uncertain_weight": 0.4,
+                  "benign_weight": 0.15, "anomaly_missing_standin": 0.5},
+  "target_accepted_accuracy": 0.95,
+  "min_validation_rows": 50,
+  "max_train_rows": null
+}

@@ -1,0 +1,20 @@
+{
+  "dataset_name": "ton-iot-network",
+  "reviewed": false,
+  "review_notes": "UNVERIFIED DRAFT written from public documentation, NOT from inspecting the files. Verify column names, that 'type' (multi-class) is the intended label rather than the binary 'label', and label spellings. 'ts' is epoch seconds and the mapping format has no epoch transform, so observed_at is null (time-based splitting unavailable until that is added under review). IP address columns are deliberately not mapped.",
+  "license_note": "Check the dataset owner's current licence/terms before use; not verified here.",
+  "label_column": "type",
+  "benign_labels": ["normal"],
+  "fields": {
+    "duration": {"column": "duration"},
+    "protocol": {"column": "proto", "value_map": {"tcp": "tcp", "udp": "udp", "icmp": "icmp"}, "default": "other"},
+    "source_port": {"column": "src_port"}, "destination_port": {"column": "dst_port"},
+    "flow_packets": {"sum_of": ["src_pkts", "dst_pkts"]},
+    "flow_bytes": {"sum_of": ["src_bytes", "dst_bytes"]},
+    "packets_per_second": {"derive_rate_of": "flow_packets"},
+    "bytes_per_second": {"derive_rate_of": "flow_bytes"},
+    "connection_state": {"column": "conn_state"},
+    "direction": {"constant": "unknown"},
+    "observed_at": {}
+  }
+}

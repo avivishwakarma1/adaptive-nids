@@ -1,0 +1,21 @@
+{
+  "dataset_name": "cicids2017",
+  "reviewed": false,
+  "review_notes": "UNVERIFIED DRAFT written from public documentation, NOT from inspecting the files. Verify: header spelling (leading spaces are stripped), that 'Flow Duration' is in microseconds (scale 1e-6), whether your variant has a Protocol/Source Port column, label spellings (some contain non-ASCII dashes), and the literature on labelling and flow-construction problems in this dataset before trusting its labels. MachineLearningCVE variants lack protocol and source port, so they are mapped to unknown/null.",
+  "license_note": "Check the dataset owner's current licence/terms before use; not verified here.",
+  "strip_header_whitespace": true,
+  "label_column": "Label",
+  "benign_labels": ["benign"],
+  "fields": {
+    "duration": {"column": "Flow Duration", "scale": 1e-6},
+    "protocol": {"constant": "unknown"},
+    "source_port": {}, "destination_port": {"column": "Destination Port"},
+    "flow_packets": {"sum_of": ["Total Fwd Packets", "Total Backward Packets"]},
+    "flow_bytes": {"sum_of": ["Total Length of Fwd Packets", "Total Length of Bwd Packets"]},
+    "packets_per_second": {"column": "Flow Packets/s"},
+    "bytes_per_second": {"column": "Flow Bytes/s"},
+    "connection_state": {"constant": "unknown"},
+    "direction": {"constant": "unknown"},
+    "observed_at": {}
+  }
+}

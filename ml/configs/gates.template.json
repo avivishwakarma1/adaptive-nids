@@ -1,0 +1,11 @@
+{
+  "_comment": "ALL NULL ON PURPOSE. With no quantitative gate set, validation FAILS (fail closed). Set values only after a real baseline evaluation, and record why.",
+  "minimum_recall": null,
+  "maximum_false_positive_rate": null,
+  "minimum_macro_f1": null,
+  "minimum_per_class_recall": null,
+  "minimum_samples": null,
+  "maximum_macro_f1_drop": null,
+  "maximum_per_class_recall_drop": null,
+  "maximum_false_positive_rate_increase": null
+}
