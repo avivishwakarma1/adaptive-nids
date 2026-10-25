@@ -1,0 +1,21 @@
+{
+  "dataset_name": "unsw-nb15",
+  "reviewed": false,
+  "review_notes": "UNVERIFIED DRAFT written from public documentation, NOT from inspecting the files. Compare every column name, unit, label spelling and the benign label with the real header (use scripts/inspect_dataset.py), fix this file, then set reviewed=true. The partitioned training/testing CSVs have no IP/port columns, so ports/timestamps are mapped to null.",
+  "license_note": "Check the dataset owner's current licence/terms before use; not verified here.",
+  "label_column": "attack_cat",
+  "benign_labels": ["normal"],
+  "label_map": {"backdoors": "backdoor"},
+  "fields": {
+    "duration": {"column": "dur"},
+    "protocol": {"column": "proto", "value_map": {"tcp": "tcp", "udp": "udp", "icmp": "icmp"}, "default": "other"},
+    "source_port": {}, "destination_port": {},
+    "flow_packets": {"sum_of": ["spkts", "dpkts"]},
+    "flow_bytes": {"sum_of": ["sbytes", "dbytes"]},
+    "packets_per_second": {"derive_rate_of": "flow_packets"},
+    "bytes_per_second": {"derive_rate_of": "flow_bytes"},
+    "connection_state": {"column": "state"},
+    "direction": {"constant": "unknown"},
+    "observed_at": {}
+  }
+}

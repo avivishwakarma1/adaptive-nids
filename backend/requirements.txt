@@ -1,0 +1,12 @@
+fastapi>=0.115,<1
+uvicorn[standard]>=0.30,<1
+pydantic>=2.8,<3
+pydantic-settings>=2.4,<3
+pymongo>=4.8,<5
+argon2-cffi>=23.1,<26
+PyJWT>=2.9,<3
+python-multipart>=0.0.9
+email-validator>=2.2
+pytest>=8.3
+httpx>=0.27
+-e ../ml

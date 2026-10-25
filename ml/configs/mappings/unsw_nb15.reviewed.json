@@ -1,0 +1,53 @@
+
+{
+  "dataset_name": "unsw-nb15",
+  "reviewed": true,
+  "review_notes": "Compared mapped column names with the actual UNSW-NB15 training and testing CSV headers. Verified attack_cat values and the Normal/attack relationship against the training label cross-tab. Source and destination ports and timestamps are unavailable in these CSVs and are intentionally unmapped. Canonical feature semantics and dataset terms still require review; this mapping is provisional and is not final approval for model training.",
+  "license_note": "Check the dataset owner's current licence and terms before use; not yet verified.",
+  "label_column": "attack_cat",
+  "benign_labels": [
+    "normal"
+  ],
+  "label_map": {},
+  "fields": {
+    "duration": {
+      "column": "dur"
+    },
+    "protocol": {
+      "column": "proto",
+      "value_map": {
+        "tcp": "tcp",
+        "udp": "udp",
+        "icmp": "icmp"
+      },
+      "default": "other"
+    },
+    "source_port": {},
+    "destination_port": {},
+    "flow_packets": {
+      "sum_of": [
+        "spkts",
+        "dpkts"
+      ]
+    },
+    "flow_bytes": {
+      "sum_of": [
+        "sbytes",
+        "dbytes"
+      ]
+    },
+    "packets_per_second": {
+      "derive_rate_of": "flow_packets"
+    },
+    "bytes_per_second": {
+      "derive_rate_of": "flow_bytes"
+    },
+    "connection_state": {
+      "column": "state"
+    },
+    "direction": {
+      "constant": "unknown"
+    },
+    "observed_at": {}
+  }
+}
