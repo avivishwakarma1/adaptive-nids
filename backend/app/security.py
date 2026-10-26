@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta, timezone
 import jwt
 from argon2 import PasswordHasher
@@ -9,6 +10,7 @@ from uuid import uuid4
 from fastapi import Depends, HTTPException, Request
 from pymongo.errors import PyMongoError
 
+logger = logging.getLogger("adaptive_nids.security")
 _hasher = PasswordHasher()
 _bearer = HTTPBearer(auto_error=False)
 ROLES = {"admin", "analyst", "viewer"}
@@ -104,6 +106,7 @@ def current_user(
     claims = decode_access_token(credentials.credentials, settings)
 
     db = getattr(request.app.state, "db", None)
+
     if db is None:
         raise HTTPException(
             status_code=503,
@@ -113,6 +116,9 @@ def current_user(
     try:
         revoked = db.revoked_tokens.find_one({"jti": claims["jti"]})
     except PyMongoError:
+        logger.exception(
+            "MongoDB error while checking authentication token revocation"
+        )
         raise HTTPException(
             status_code=503,
             detail="Unable to verify token status.",
@@ -134,6 +140,9 @@ def current_user(
     except (ValueError, TypeError):
         user = None
     except PyMongoError:
+        logger.exception(
+            "MongoDB error while checking authenticated user status"
+        )
         raise HTTPException(
             status_code=503,
             detail="Unable to verify user status.",

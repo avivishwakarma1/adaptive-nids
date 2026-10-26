@@ -14,7 +14,8 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pymongo.errors import PyMongoError
+from bson import ObjectId
+from pymongo.errors import ConfigurationError, OperationFailure, PyMongoError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .config import Settings, get_settings
@@ -48,8 +49,189 @@ class PredictionBodyTooLarge(Exception):
     pass
 
 
+class InvalidPredictionOutputError(Exception):
+    pass
+
+
 def utc_now():
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def parse_utc_datetime(value: str) -> datetime:
+    if not isinstance(value, str):
+        raise ValueError("timestamp must be a string")
+
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("timestamp must include a UTC offset")
+    return parsed.astimezone(timezone.utc)
+
+
+def build_prediction_documents(observations, results):
+    if not isinstance(results, list) or len(results) != len(observations):
+        raise InvalidPredictionOutputError
+
+    results_by_row = {}
+    for result in results:
+        if not isinstance(result, PredictionResult):
+            raise InvalidPredictionOutputError
+        row_index = result.row_index
+        if (
+            type(row_index) is not int
+            or row_index < 0
+            or row_index >= len(observations)
+            or row_index in results_by_row
+        ):
+            raise InvalidPredictionOutputError
+        results_by_row[row_index] = result
+
+    if set(results_by_row) != set(range(len(observations))):
+        raise InvalidPredictionOutputError
+
+    batch_id = uuid4().hex
+    created_at = datetime.now(timezone.utc)
+    prediction_documents = []
+    alert_documents = []
+
+    for row_index, observation in enumerate(observations):
+        result = results_by_row[row_index]
+        try:
+            observed_at = parse_utc_datetime(observation["observed_at"])
+            prediction_timestamp = parse_utc_datetime(
+                result.prediction_timestamp
+            )
+        except (KeyError, TypeError, ValueError):
+            raise InvalidPredictionOutputError from None
+
+        prediction_id = ObjectId()
+        prediction_documents.append({
+            "_id": prediction_id,
+            "prediction_batch_id": batch_id,
+            "row_index": row_index,
+            "observed_at": observed_at,
+            "prediction_label": result.prediction_label,
+            "prediction_type": result.prediction_type,
+            "confidence": result.confidence,
+            "anomaly_score": result.anomaly_score,
+            "risk_score": result.risk_score,
+            "severity": result.severity,
+            "reason_codes": result.reason_codes,
+            "model_version": result.model_version,
+            "feature_schema_version": result.feature_schema_version,
+            "prediction_timestamp": prediction_timestamp,
+            "created_at": created_at,
+            "updated_at": created_at,
+        })
+
+        if (
+            result.prediction_type == "known_attack"
+            and result.risk_score >= 60
+            and result.severity in {"high", "critical"}
+        ):
+            alert_documents.append({
+                "_id": ObjectId(),
+                "prediction_batch_id": batch_id,
+                "prediction_id": prediction_id,
+                "row_index": row_index,
+                "prediction_label": result.prediction_label,
+                "prediction_type": result.prediction_type,
+                "risk_score": result.risk_score,
+                "created_at": created_at,
+                "severity": result.severity,
+                "status": "open",
+            })
+
+    return batch_id, prediction_documents, alert_documents
+
+
+def _insert_prediction_batch(db, prediction_documents, alert_documents, session=None):
+    options = {"ordered": True}
+    if session is not None:
+        options["session"] = session
+    if prediction_documents:
+        db.standalone_predictions.insert_many(
+            prediction_documents,
+            **options,
+        )
+    if alert_documents:
+        db.alerts.insert_many(alert_documents, **options)
+
+
+def _persist_without_transaction(
+    db,
+    batch_id,
+    prediction_documents,
+    alert_documents,
+):
+    try:
+        _insert_prediction_batch(
+            db,
+            prediction_documents,
+            alert_documents,
+        )
+    except PyMongoError:
+        try:
+            db.standalone_predictions.delete_many({
+                "prediction_batch_id": batch_id
+            })
+            db.alerts.delete_many({"prediction_batch_id": batch_id})
+            if (
+                db.standalone_predictions.count_documents({
+                    "prediction_batch_id": batch_id
+                })
+                or db.alerts.count_documents({"prediction_batch_id": batch_id})
+            ):
+                logger.error(
+                    "Compensating cleanup left records for prediction batch %s.",
+                    batch_id,
+                )
+        except PyMongoError:
+            logger.error(
+                "Compensating cleanup failed for prediction batch %s; "
+                "partial records may remain.",
+                batch_id,
+                exc_info=True,
+            )
+        raise
+
+
+def persist_prediction_batch(
+    db,
+    batch_id,
+    prediction_documents,
+    alert_documents,
+):
+    try:
+        with db.client.start_session() as session:
+            with session.start_transaction():
+                _insert_prediction_batch(
+                    db,
+                    prediction_documents,
+                    alert_documents,
+                    session,
+                )
+        return
+    except ConfigurationError:
+        logger.info(
+            "MongoDB sessions are unavailable; using compensating writes "
+            "for prediction batch %s.",
+            batch_id,
+        )
+    except OperationFailure as exc:
+        if exc.code != 20 or "transaction" not in str(exc).lower():
+            raise
+        logger.info(
+            "MongoDB transactions are unsupported; using compensating writes "
+            "for prediction batch %s.",
+            batch_id,
+        )
+
+    _persist_without_transaction(
+        db,
+        batch_id,
+        prediction_documents,
+        alert_documents,
+    )
 
 
 class PredictionRequestSizeLimitMiddleware:
@@ -269,7 +451,7 @@ def create_app(settings: Settings | None = None, mongo_client=None) -> FastAPI:
             )
 
         try:
-            return predictor.predict(payload.observations)
+            results = predictor.predict(payload.observations)
         except (InputValidationError, SchemaVersionError) as exc:
             details = []
             for issue in getattr(exc, "issues", []):
@@ -297,16 +479,70 @@ def create_app(settings: Settings | None = None, mongo_client=None) -> FastAPI:
                 ),
             )
         except ModelUnavailableError:
+            logger.exception("Prediction model unavailable during inference")
             raise HTTPException(
                 status_code=503,
                 detail="Prediction service is temporarily unavailable.",
             )
         except Exception:
-            logger.error("Prediction inference failed.")
+            logger.exception("Prediction inference failed")
             raise HTTPException(
                 status_code=503,
                 detail="Prediction service is temporarily unavailable.",
             )
+
+        try:
+            batch_id, prediction_documents, alert_documents = (
+                build_prediction_documents(payload.observations, results)
+            )
+        except InvalidPredictionOutputError:
+            logger.error(
+                "Prediction inference returned results that do not map "
+                "one-to-one to submitted observations."
+            )
+            return JSONResponse(
+                status_code=503,
+                content=error_payload(
+                    request,
+                    "INVALID_PREDICTION_OUTPUT",
+                    "Prediction service is temporarily unavailable.",
+                ),
+            )
+
+        db = getattr(request.app.state, "db", None)
+        if db is None:
+            return JSONResponse(
+                status_code=503,
+                content=error_payload(
+                    request,
+                    "PERSISTENCE_UNAVAILABLE",
+                    "Prediction results could not be saved.",
+                ),
+            )
+
+        try:
+            persist_prediction_batch(
+                db,
+                batch_id,
+                prediction_documents,
+                alert_documents,
+            )
+        except PyMongoError:
+            logger.error(
+                "Prediction persistence failed for batch %s.",
+                batch_id,
+                exc_info=True,
+            )
+            return JSONResponse(
+                status_code=503,
+                content=error_payload(
+                    request,
+                    "PERSISTENCE_UNAVAILABLE",
+                    "Prediction results could not be saved.",
+                ),
+            )
+
+        return results
 
     @app.post(
         settings.nids_api_prefix + "/auth/login",
@@ -521,6 +757,8 @@ def create_app(settings: Settings | None = None, mongo_client=None) -> FastAPI:
             )
 
         def iso_utc(value: datetime) -> str:
+            if value.tzinfo is None or value.utcoffset() is None:
+                value = value.replace(tzinfo=timezone.utc)
             return value.astimezone(timezone.utc).isoformat().replace(
                 "+00:00", "Z"
             )
@@ -581,6 +819,16 @@ def create_app(settings: Settings | None = None, mongo_client=None) -> FastAPI:
                 ),
                 "observations": int(
                     db.predictions.count_documents(prediction_filter)
+                    + (
+                        db.standalone_predictions.count_documents({
+                            "observed_at": {
+                                "$gte": start,
+                                "$lte": end,
+                            }
+                        })
+                        if not dataset_id
+                        else 0
+                    )
                 ),
                 "alerts": int(
                     db.alerts.count_documents(alert_filter)
@@ -614,18 +862,26 @@ def create_app(settings: Settings | None = None, mongo_client=None) -> FastAPI:
 
             prediction_type_counts = zero_counts(prediction_keys)
 
-            for row in db.predictions.aggregate([
-                {"$match": prediction_filter},
-                {
-                    "$group": {
-                        "_id": "$prediction_type",
-                        "count": {"$sum": 1},
-                    }
-                },
-            ]):
-                key = row["_id"]
-                if key in prediction_type_counts:
-                    prediction_type_counts[key] = int(row["count"])
+            prediction_sources = [(db.predictions, prediction_filter)]
+            if not dataset_id:
+                prediction_sources.append((
+                    db.standalone_predictions,
+                    {"observed_at": {"$gte": start, "$lte": end}},
+                ))
+
+            for collection, collection_filter in prediction_sources:
+                for row in collection.aggregate([
+                    {"$match": collection_filter},
+                    {
+                        "$group": {
+                            "_id": "$prediction_type",
+                            "count": {"$sum": 1},
+                        }
+                    },
+                ]):
+                    key = row["_id"]
+                    if key in prediction_type_counts:
+                        prediction_type_counts[key] += int(row["count"])
 
             bucket_unit = (
                 "hour"
@@ -633,28 +889,53 @@ def create_app(settings: Settings | None = None, mongo_client=None) -> FastAPI:
                 else "day"
             )
 
-            risk_series = list(db.predictions.aggregate([
+            grouped_risk = {}
+            for collection, collection_filter in prediction_sources:
+                for row in collection.aggregate([
+                    {
+                        "$match": {
+                            **collection_filter,
+                            "risk_score": {"$gte": 0, "$lte": 100},
+                        }
+                    },
+                    {
+                        "$group": {
+                            "_id": {
+                                "$dateTrunc": {
+                                    "date": "$observed_at",
+                                    "unit": bucket_unit,
+                                    "timezone": "UTC",
+                                }
+                            },
+                            "count": {"$sum": 1},
+                            "mean_risk_score": {"$avg": "$risk_score"},
+                        }
+                    },
+                    {"$sort": {"_id": 1}},
+                ]):
+                    group = grouped_risk.setdefault(
+                        row["_id"],
+                        {"count": 0, "weighted_risk": 0.0},
+                    )
+                    row_count = int(row["count"])
+                    group["count"] += row_count
+                    if row.get("mean_risk_score") is not None:
+                        group["weighted_risk"] += (
+                            float(row["mean_risk_score"]) * row_count
+                        )
+
+            risk_series = [
                 {
-                    "$match": {
-                        **prediction_filter,
-                        "risk_score": {"$gte": 0, "$lte": 100},
-                    }
-                },
-                {
-                    "$group": {
-                        "_id": {
-                            "$dateTrunc": {
-                                "date": "$observed_at",
-                                "unit": bucket_unit,
-                                "timezone": "UTC",
-                            }
-                        },
-                        "count": {"$sum": 1},
-                        "mean_risk_score": {"$avg": "$risk_score"},
-                    }
-                },
-                {"$sort": {"_id": 1}},
-            ]))
+                    "_id": bucket_start,
+                    "count": values["count"],
+                    "mean_risk_score": (
+                        values["weighted_risk"] / values["count"]
+                        if values["count"]
+                        else None
+                    ),
+                }
+                for bucket_start, values in sorted(grouped_risk.items())
+            ]
 
         except PyMongoError:
             logger.exception("Dashboard summary database query failed")

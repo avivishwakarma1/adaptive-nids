@@ -1,7 +1,7 @@
 from pymongo import MongoClient
 from pymongo.errors import PyMongoError
 
-COLLECTIONS = ("users","datasets","jobs","predictions","alerts","investigations","feedback","model_registry","model_evaluations","reports","audit_events","simulated_actions")
+COLLECTIONS = ("users","datasets","jobs","predictions","standalone_predictions","alerts","investigations","feedback","model_registry","model_evaluations","reports","audit_events","simulated_actions")
 
 def create_mongo_client(uri: str):
     if not uri:
@@ -18,6 +18,11 @@ def ensure_indexes(db):
     db.jobs.create_index([("status", 1), ("created_at", 1)])
     db.jobs.create_index([("resource_id", 1), ("created_at", -1)])
     db.predictions.create_index([("dataset_id", 1), ("row_index", 1)], unique=True)
+    db.standalone_predictions.create_index(
+        [("prediction_batch_id", 1), ("row_index", 1)],
+        unique=True,
+    )
+    db.standalone_predictions.create_index("observed_at")
     db.alerts.create_index([("created_at", -1), ("_id", -1)])
     db.audit_events.create_index([("created_at", -1), ("_id", -1)])
 

@@ -10,6 +10,10 @@ import ProtectedRoute from '../router/ProtectedRoute.jsx';
 import DashboardPage from '../pages/DashboardPage.jsx';
 import { TestProviders } from './testUtils.jsx';
 
+vi.mock('../api/dashboardApi.js', () => ({
+  getDashboardSummary: vi.fn(),
+}));
+
 vi.mock('../api/authApi.js', () => ({
   loginRequest: vi.fn(),
   getCurrentUser: vi.fn(),
@@ -21,6 +25,7 @@ import {
   loginRequest,
   logoutRequest,
 } from '../api/authApi.js';
+import { getDashboardSummary } from '../api/dashboardApi.js';
 
 const testUser = {
   id: 'user-1',
@@ -222,15 +227,133 @@ describe('authentication', () => {
     expect(logoutRequest).toHaveBeenCalledTimes(1);
   });
 
-  it('shows unavailable state instead of invented dashboard metrics', () => {
+  it('shows a loading state while the dashboard summary is being requested', () => {
+    getDashboardSummary.mockReturnValue(new Promise(() => {}));
+
+    render(<DashboardPage />);
+
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Loading dashboard summary…'
+    );
+    expect(getDashboardSummary).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders the totals and category counts returned by the API', async () => {
+    getDashboardSummary.mockResolvedValue({
+      range: {
+        from: '2026-01-01T00:00:00Z',
+        to: '2026-01-02T00:00:00Z',
+      },
+      totals: {
+        datasets: 3,
+        observations: 24,
+        alerts: 5,
+        open_alerts: 2,
+      },
+      severity_counts: {
+        critical: 1,
+        high: 2,
+        medium: 1,
+        low: 1,
+        info: 0,
+      },
+      prediction_type_counts: {
+        known_attack: 4,
+        benign: 15,
+        anomaly: 3,
+        uncertain: 2,
+      },
+      risk_series: [
+        {
+          bucket_start: '2026-01-01T00:00:00Z',
+          count: 10,
+          mean_risk_score: null,
+        },
+        {
+          bucket_start: '2026-01-01T12:00:00Z',
+          count: 14,
+          mean_risk_score: 0.72,
+        },
+      ],
+      generated_at: '2026-01-02T00:05:00Z',
+    });
+
     render(<DashboardPage />);
 
     expect(
-      screen.getByText(/no dashboard summary endpoint is registered/i)
+      (await screen.findByText('Observed traffic')).closest('article')
+    ).toHaveTextContent('24');
+    expect(screen.getByText('Alerts', { exact: true }).closest('article'))
+      .toHaveTextContent('5');
+    expect(screen.getByText('Datasets', { exact: true }).closest('article'))
+      .toHaveTextContent('3');
+    expect(screen.getByText('Open alerts', { exact: true }).closest('article'))
+      .toHaveTextContent('2');
+    expect(screen.getByRole('img', { name: /risk trend chart/i }))
+      .toBeInTheDocument();
+    expect(
+      screen.getByText('Mean risk score is unavailable for 1 time bucket.')
     ).toBeInTheDocument();
+    expect(screen.getByText('known attack')).toBeInTheDocument();
+    expect(screen.getByText(/Summary generated/)).toBeInTheDocument();
+    expect(getDashboardSummary).toHaveBeenCalledWith();
+  });
+
+  it('shows an honest empty state when the API returns no activity', async () => {
+    getDashboardSummary.mockResolvedValue({
+      range: { from: '2026-01-01T00:00:00Z', to: '2026-01-02T00:00:00Z' },
+      totals: { datasets: 0, observations: 0, alerts: 0, open_alerts: 0 },
+      severity_counts: { critical: 0, high: 0, medium: 0, low: 0, info: 0 },
+      prediction_type_counts: {
+        known_attack: 0,
+        benign: 0,
+        anomaly: 0,
+        uncertain: 0,
+      },
+      risk_series: [],
+      generated_at: '2026-01-02T00:05:00Z',
+    });
+
+    render(<DashboardPage />);
 
     expect(
-      screen.getByText(/waiting for dashboard api/i)
+      await screen.findByText('No activity for this summary')
     ).toBeInTheDocument();
+    expect(screen.getByText('No risk-series data')).toBeInTheDocument();
+    expect(
+      screen.queryByRole('img', { name: /risk trend chart/i })
+    ).not.toBeInTheDocument();
+  });
+
+  it('shows the API error without crashing and allows a retry', async () => {
+    getDashboardSummary
+      .mockRejectedValueOnce({ userMessage: 'Dashboard access was denied.' })
+      .mockResolvedValueOnce({
+        range: { from: '', to: '' },
+        totals: { datasets: 0, observations: 0, alerts: 0, open_alerts: 0 },
+        severity_counts: { critical: 0, high: 0, medium: 0, low: 0, info: 0 },
+        prediction_type_counts: {
+          known_attack: 0,
+          benign: 0,
+          anomaly: 0,
+          uncertain: 0,
+        },
+        risk_series: [],
+        generated_at: 'invalid-date',
+      });
+
+    const actor = userEvent.setup();
+    render(<DashboardPage />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Dashboard access was denied.'
+    );
+    await actor.click(screen.getByRole('button', { name: /try again/i }));
+
+    expect(
+      await screen.findByText('No activity for this summary')
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Summary generated Unavailable/)).toBeInTheDocument();
+    expect(getDashboardSummary).toHaveBeenCalledTimes(2);
   });
 });
