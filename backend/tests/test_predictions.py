@@ -102,14 +102,16 @@ class FakeWriteCollection:
 
 
 class FakeDatabase:
-    def __init__(self, user_active=True):
+    def __init__(self, user_active=True, user_role="analyst"):
         self.revoked_tokens = SimpleNamespace(
             create_index=lambda *args, **kwargs: None,
             find_one=lambda query: None,
         )
         self.users = SimpleNamespace(
             find_one=lambda query, projection=None: (
-                {"is_active": True} if user_active else None
+                {"is_active": True, "role": user_role}
+                if user_active
+                else None
             )
         )
         self.standalone_predictions = FakeWriteCollection()
@@ -142,9 +144,14 @@ class FakeSession:
 
 
 class FakeMongoClient:
-    def __init__(self, user_active=True, transaction_supported=False):
+    def __init__(
+        self,
+        user_active=True,
+        user_role="analyst",
+        transaction_supported=False,
+    ):
         self.admin = SimpleNamespace(command=lambda command: None)
-        self.database = FakeDatabase(user_active)
+        self.database = FakeDatabase(user_active, user_role)
         self.database.client = self
         self.transaction_supported = transaction_supported
         self.transaction_started = False
@@ -167,6 +174,7 @@ def make_client(
     database=None,
     transaction_supported=False,
     token_role="analyst",
+    user_role=None,
 ):
     settings = Settings(
         jwt_secret_key="s" * 32,
@@ -181,6 +189,7 @@ def make_client(
 
     mongo_client = FakeMongoClient(
         user_active=user_active,
+        user_role=token_role if user_role is None else user_role,
         transaction_supported=transaction_supported,
     )
     if database is not None:
@@ -297,7 +306,7 @@ def test_viewer_stays_denied_when_audit_persistence_fails(monkeypatch):
     predictor = SimpleNamespace(
         predict=lambda records: calls.append(records) or [prediction_result()]
     )
-    database = FakeDatabase()
+    database = FakeDatabase(user_role="viewer")
     database.audit_events.fail_insert_one = True
     client, token = make_client(
         monkeypatch,

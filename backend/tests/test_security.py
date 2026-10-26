@@ -4,6 +4,8 @@ from unittest.mock import Mock
 
 import pytest
 from fastapi import HTTPException
+from fastapi.security import HTTPAuthorizationCredentials
+from bson import ObjectId
 from pymongo.errors import PyMongoError
 
 from app.config import Settings
@@ -12,6 +14,7 @@ from app.security import (
     verify_password,
     create_access_token,
     decode_access_token,
+    current_user,
     require_roles,
 )
 
@@ -174,3 +177,121 @@ def test_require_roles_still_denies_when_audit_collection_is_missing(
     assert exc_info.value.status_code == 403
     assert exc_info.value.detail == "Insufficient permissions."
     assert "Failed to persist authorization denial audit event" in caplog.text
+
+
+def authenticated_request(
+    *,
+    token_role="analyst",
+    user_active=True,
+    user_role="analyst",
+    revoked=False,
+    user_lookup_error=None,
+):
+    settings = Settings(jwt_secret_key="s" * 32)
+    user_id = ObjectId()
+    token, _ = create_access_token(str(user_id), token_role, settings)
+    revoked_tokens = SimpleNamespace(
+        find_one=lambda query: {"jti": query["jti"]} if revoked else None
+    )
+
+    def find_user(query, projection):
+        assert query == {"_id": user_id}
+        assert projection == {"is_active": 1, "role": 1}
+        if user_lookup_error is not None:
+            raise user_lookup_error
+        if not user_active:
+            return None
+        user = {"is_active": True}
+        if user_role is not None:
+            user["role"] = user_role
+        return user
+
+    database = SimpleNamespace(
+        revoked_tokens=revoked_tokens,
+        users=SimpleNamespace(find_one=find_user),
+    )
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(db=database))
+    )
+    credentials = HTTPAuthorizationCredentials(
+        scheme="Bearer",
+        credentials=token,
+    )
+    return request, credentials, settings
+
+
+def test_current_user_accepts_active_user_with_matching_database_role():
+    request, credentials, settings = authenticated_request(
+        token_role="analyst",
+        user_role="analyst",
+    )
+
+    claims = current_user(request, credentials, settings)
+
+    assert claims["role"] == "analyst"
+
+
+@pytest.mark.parametrize(
+    ("token_role", "user_role"),
+    [
+        ("analyst", "viewer"),
+        ("viewer", "admin"),
+    ],
+)
+def test_current_user_rejects_changed_database_role(token_role, user_role):
+    request, credentials, settings = authenticated_request(
+        token_role=token_role,
+        user_role=user_role,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        current_user(request, credentials, settings)
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "User role has changed. Please log in again."
+
+
+@pytest.mark.parametrize("user_role", [None, "operator", []])
+def test_current_user_rejects_missing_or_invalid_database_role(user_role):
+    request, credentials, settings = authenticated_request(
+        user_role=user_role,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        current_user(request, credentials, settings)
+
+    assert exc_info.value.status_code == 401
+
+
+def test_current_user_still_rejects_inactive_user():
+    request, credentials, settings = authenticated_request(
+        user_active=False,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        current_user(request, credentials, settings)
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "Invalid or inactive credentials."
+
+
+def test_current_user_still_rejects_revoked_token():
+    request, credentials, settings = authenticated_request(revoked=True)
+
+    with pytest.raises(HTTPException) as exc_info:
+        current_user(request, credentials, settings)
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "Token has been revoked. Please log in again."
+
+
+def test_current_user_returns_service_unavailable_on_user_lookup_failure():
+    request, credentials, settings = authenticated_request(
+        user_lookup_error=PyMongoError("database unavailable"),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        current_user(request, credentials, settings)
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == "Unable to verify user status."

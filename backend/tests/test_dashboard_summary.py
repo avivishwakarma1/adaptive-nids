@@ -199,6 +199,7 @@ class FakeDatabase:
             find_one=lambda query, projection=None: {
                 "_id": ObjectId(query["_id"]),
                 "is_active": True,
+                "role": "analyst",
             }
         )
         self.revoked_tokens = FakeCollection([])

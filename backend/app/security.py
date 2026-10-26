@@ -135,7 +135,7 @@ def current_user(
 
         user = db.users.find_one(
             {"_id": ObjectId(claims["sub"])},
-            {"is_active": 1},
+            {"is_active": 1, "role": 1},
         )
     except (ValueError, TypeError):
         user = None
@@ -152,6 +152,18 @@ def current_user(
         raise HTTPException(
             status_code=401,
             detail="Invalid or inactive credentials.",
+        )
+
+    user_role = user.get("role")
+    if not isinstance(user_role, str) or user_role not in ROLES:
+        raise HTTPException(
+            status_code=401,
+            detail="User role has changed. Please log in again.",
+        )
+    if user_role != claims["role"]:
+        raise HTTPException(
+            status_code=401,
+            detail="User role has changed. Please log in again.",
         )
 
     return claims
