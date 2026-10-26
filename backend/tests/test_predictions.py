@@ -1,5 +1,6 @@
 import asyncio
 from types import SimpleNamespace
+from datetime import timezone
 
 import pytest
 from bson import ObjectId
@@ -61,6 +62,7 @@ class FakeWriteCollection:
     def __init__(self):
         self.records = []
         self.fail_insert = False
+        self.fail_insert_one = False
         self.fail_transaction = False
         self.fail_delete = False
 
@@ -76,6 +78,11 @@ class FakeWriteCollection:
                 code=20,
             )
         self.records.extend(records)
+
+    def insert_one(self, record, **kwargs):
+        if self.fail_insert_one:
+            raise PyMongoError("simulated audit persistence failure")
+        self.records.append(record)
 
     def delete_many(self, query):
         if self.fail_delete:
@@ -107,6 +114,7 @@ class FakeDatabase:
         )
         self.standalone_predictions = FakeWriteCollection()
         self.alerts = FakeWriteCollection()
+        self.audit_events = FakeWriteCollection()
         self.client = None
 
 
@@ -158,6 +166,7 @@ def make_client(
     user_active=True,
     database=None,
     transaction_supported=False,
+    token_role="analyst",
 ):
     settings = Settings(
         jwt_secret_key="s" * 32,
@@ -186,7 +195,7 @@ def make_client(
     )
     app.dependency_overrides[get_settings] = lambda: settings
     client = TestClient(app)
-    token, _ = create_access_token(str(ObjectId()), "analyst", settings)
+    token, _ = create_access_token(str(ObjectId()), token_role, settings)
     return client, token
 
 
@@ -220,6 +229,96 @@ def test_authenticated_prediction_calls_predictor_and_preserves_contract(monkeyp
     assert response.json()[0] == result.model_dump()
     assert len(client.app.state.db.standalone_predictions.records) == 1
     assert len(client.app.state.db.alerts.records) == 1
+
+
+@pytest.mark.parametrize("role", ["analyst", "admin"])
+def test_analysts_and_admins_can_submit_predictions(monkeypatch, role):
+    calls = []
+    predictor = SimpleNamespace(
+        predict=lambda records: calls.append(records) or [prediction_result()]
+    )
+    client, token = make_client(
+        monkeypatch,
+        predictor=predictor,
+        token_role=role,
+    )
+
+    with client:
+        response = client.post(
+            "/api/v1/predictions",
+            json={"observations": [flow_record()]},
+            headers=auth_headers(token),
+        )
+
+    assert response.status_code == 200
+    assert len(calls) == 1
+    assert len(client.app.state.db.standalone_predictions.records) == 1
+
+
+def test_viewer_is_denied_and_audited_before_prediction(monkeypatch):
+    calls = []
+    predictor = SimpleNamespace(
+        predict=lambda records: calls.append(records) or [prediction_result()]
+    )
+    client, token = make_client(
+        monkeypatch,
+        predictor=predictor,
+        token_role="viewer",
+    )
+
+    with client:
+        response = client.post(
+            "/api/v1/predictions",
+            json={"observations": [flow_record()]},
+            headers=auth_headers(token),
+        )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["message"] == "Insufficient permissions."
+    assert calls == []
+    assert client.app.state.db.standalone_predictions.records == []
+    assert client.app.state.db.alerts.records == []
+
+    [event] = client.app.state.db.audit_events.records
+    assert event["created_at"].tzinfo == timezone.utc
+    assert event["actor_subject_id"]
+    assert event["actor_role"] == "viewer"
+    assert event["action"] == "authorization.denied"
+    assert event["request_method"] == "POST"
+    assert event["request_path"] == "/api/v1/predictions"
+    assert event["denial_reason"] == "role_not_allowed"
+    assert "observations" not in event
+    assert "token" not in event
+    assert "password" not in event
+
+
+def test_viewer_stays_denied_when_audit_persistence_fails(monkeypatch):
+    calls = []
+    predictor = SimpleNamespace(
+        predict=lambda records: calls.append(records) or [prediction_result()]
+    )
+    database = FakeDatabase()
+    database.audit_events.fail_insert_one = True
+    client, token = make_client(
+        monkeypatch,
+        predictor=predictor,
+        database=database,
+        token_role="viewer",
+    )
+
+    with client:
+        response = client.post(
+            "/api/v1/predictions",
+            json={"observations": [flow_record()]},
+            headers=auth_headers(token),
+        )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["message"] == "Insufficient permissions."
+    assert calls == []
+    assert database.audit_events.records == []
+    assert database.standalone_predictions.records == []
+    assert database.alerts.records == []
 
 
 def test_predictions_persist_with_utc_timestamps_and_row_mapping(monkeypatch):
@@ -624,7 +723,7 @@ def test_prediction_openapi_documents_auth_schemas_and_error_responses():
     assert "observed_at" in request_description
     assert "source_id is optional" in request_description
     assert set(prediction_schema["properties"]) == set(PredictionResult.model_fields)
-    for status_code in ("401", "413", "422", "503"):
+    for status_code in ("401", "403", "413", "422", "503"):
         assert operation["responses"][status_code]["content"]["application/json"]["schema"]["$ref"] == (
             "#/components/schemas/ErrorEnvelope"
         )

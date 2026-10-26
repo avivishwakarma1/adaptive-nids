@@ -40,7 +40,12 @@ from .schemas import (
     ErrorEnvelope,
     DashboardSummaryResponse,
 )
-from .security import verify_password, create_access_token, current_user
+from .security import (
+    verify_password,
+    create_access_token,
+    current_user,
+    require_roles,
+)
 
 logger = logging.getLogger("adaptive_nids")
 
@@ -433,6 +438,7 @@ def create_app(settings: Settings | None = None, mongo_client=None) -> FastAPI:
         response_model=list[PredictionResult],
         responses={
             401: {"model": ErrorEnvelope, "description": "Authentication required or invalid."},
+            403: {"model": ErrorEnvelope, "description": "Insufficient permissions."},
             413: {"model": ErrorEnvelope, "description": "Prediction request exceeds the configured body-size limit."},
             422: {"model": ErrorEnvelope, "description": "Request or ML feature validation failed."},
             503: {"model": ErrorEnvelope, "description": "Prediction or authentication service is unavailable."},
@@ -441,7 +447,7 @@ def create_app(settings: Settings | None = None, mongo_client=None) -> FastAPI:
     def create_predictions(
         payload: PredictionRequest,
         request: Request,
-        claims=Depends(current_user),
+        claims=Depends(require_roles("admin", "analyst")),
     ):
         predictor = getattr(request.app.state, "predictor", None)
         if predictor is None:

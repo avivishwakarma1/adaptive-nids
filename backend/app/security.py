@@ -155,3 +155,40 @@ def current_user(
         )
 
     return claims
+
+
+def require_roles(*allowed_roles: str):
+    if not allowed_roles or any(
+        not isinstance(role, str) or role not in ROLES
+        for role in allowed_roles
+    ):
+        raise ValueError("At least one valid role must be allowed.")
+
+    def role_dependency(
+        request: Request,
+        claims: dict = Depends(current_user),
+    ) -> dict:
+        if claims["role"] not in allowed_roles:
+            event = {
+                "created_at": datetime.now(timezone.utc),
+                "actor_subject_id": claims["sub"],
+                "actor_role": claims["role"],
+                "action": "authorization.denied",
+                "request_method": request.method,
+                "request_path": request.url.path,
+                "denial_reason": "role_not_allowed",
+            }
+            try:
+                request.app.state.db.audit_events.insert_one(event)
+            except PyMongoError:
+                logger.error(
+                    "Failed to persist authorization denial audit event"
+                )
+
+            raise HTTPException(
+                status_code=403,
+                detail="Insufficient permissions.",
+            )
+        return claims
+
+    return role_dependency
