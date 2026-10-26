@@ -34,6 +34,7 @@ pytest -q
 - Persistence uses a MongoDB transaction when supported. If transactions are unavailable, writes use compensating deletion on failure; if compensation itself fails, partial records may remain and the request still returns a controlled error. The prediction request has no documented idempotency key: retrying it may create a duplicate prediction batch and duplicate alerts. `X-Request-ID` is not treated as an idempotency key.
 - Create the first admin user through a controlled seed/admin procedure; public registration is intentionally absent.
 - The current code is a runnable foundation: health/readiness, Mongo lifecycle/index setup, verified ML predictor loading, error envelope, Argon2id helpers, JWT issue/validation, login/logout/me, standalone prediction persistence, and prediction-triggered alerts.
-- Dataset processing, investigations, feedback, model lifecycle, reports, audit persistence, and upload parsing are not yet implemented. Standalone prediction persistence is not a substitute for dataset processing.
-- JWT logout is stateless in v1; client must discard the access token.
+- Dataset upload/parsing and processing, investigations, feedback, model lifecycle, reports, and general audit persistence and retrieval are not yet implemented. Authorization-denial events are best-effort written to `audit_events`; this is not general audit coverage. Standalone prediction persistence is not a substitute for dataset processing.
+- JWT logout requires authentication and records the token identifier in `revoked_tokens` through its expiry. Subsequent authentication checks reject that token; logout returns 503 if revocation persistence fails. Clients should also discard the access token.
+- The ML package and alert rule have not been demonstrated to provide accurate detection on real-world traffic; no real-world detection-quality claim is made.
 - Add deployment-grade login/upload rate limiting before exposure beyond local development.
