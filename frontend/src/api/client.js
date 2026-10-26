@@ -17,11 +17,17 @@ apiClient.interceptors.request.use((config) => {
 apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
+    const envelopeMessage = error.response?.data?.error?.message;
     const detail = error.response?.data?.detail;
-    const message = Array.isArray(detail)
+    const detailMessage = Array.isArray(detail)
       ? detail.map((item) => item.msg).join(', ')
       : typeof detail === 'string'
         ? detail
+        : '';
+    const message = typeof envelopeMessage === 'string' && envelopeMessage.trim()
+      ? envelopeMessage
+      : detailMessage.trim()
+        ? detailMessage
         : error.response?.status === 401
           ? 'Your session is invalid or has expired. Please sign in again.'
           : error.message === 'Network Error'

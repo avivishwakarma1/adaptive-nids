@@ -4,7 +4,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Routes, Route } from 'react-router-dom';
 import { AuthProvider, useAuth } from '../auth/AuthContext.jsx';
-import { TOKEN_KEY } from '../api/client.js';
+import { apiClient, TOKEN_KEY } from '../api/client.js';
 import LoginPage from '../pages/LoginPage.jsx';
 import ProtectedRoute from '../router/ProtectedRoute.jsx';
 import DashboardPage from '../pages/DashboardPage.jsx';
@@ -58,6 +58,99 @@ beforeEach(() => {
   localStorage.clear();
   setBrowserPath('/');
   getCurrentUser.mockResolvedValue(testUser);
+});
+
+describe('API error messages', () => {
+  async function rejectRequest(error) {
+    try {
+      await apiClient.get('/test', {
+        adapter: () => Promise.reject(error),
+      });
+    } catch (requestError) {
+      return requestError;
+    }
+    throw new Error('Expected the API request to reject.');
+  }
+
+  it('uses the backend message for a 401 instead of the expired-session fallback', async () => {
+    const error = await rejectRequest({
+      response: {
+        status: 401,
+        data: {
+          error: {
+            code: 'UNAUTHENTICATED',
+            message: 'Invalid email or password.',
+            details: null,
+            request_id: 'request-1',
+          },
+        },
+      },
+    });
+
+    expect(error.userMessage).toBe('Invalid email or password.');
+  });
+
+  it('uses the backend message for a 422 validation error', async () => {
+    const error = await rejectRequest({
+      response: {
+        status: 422,
+        data: {
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'Request validation failed.',
+            details: [{ field: 'body.email', issue: 'invalid email' }],
+            request_id: 'request-2',
+          },
+        },
+      },
+    });
+
+    expect(error.userMessage).toBe('Request validation failed.');
+  });
+
+  it('uses the backend message for a 503 model-unavailable error', async () => {
+    const error = await rejectRequest({
+      response: {
+        status: 503,
+        data: {
+          error: {
+            code: 'MODEL_UNAVAILABLE',
+            message: 'Prediction service is temporarily unavailable.',
+            details: null,
+            request_id: 'request-3',
+          },
+        },
+      },
+    });
+
+    expect(error.userMessage).toBe(
+      'Prediction service is temporarily unavailable.'
+    );
+  });
+
+  it('retains FastAPI validation-detail array compatibility', async () => {
+    const error = await rejectRequest({
+      response: {
+        status: 422,
+        data: {
+          detail: [
+            { loc: ['body', 'email'], msg: 'invalid email' },
+            { loc: ['body', 'password'], msg: 'field required' },
+          ],
+        },
+      },
+    });
+
+    expect(error.userMessage).toBe('invalid email, field required');
+  });
+
+  it('preserves the network-error fallback', async () => {
+    const error = await rejectRequest(new Error('Network Error'));
+
+    expect(error.userMessage).toBe(
+      'Cannot reach the API. Check that the backend is running.'
+    );
+  });
 });
 
 describe('authentication', () => {
