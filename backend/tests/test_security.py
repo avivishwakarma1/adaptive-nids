@@ -114,3 +114,63 @@ def test_require_roles_still_denies_when_audit_insert_fails(caplog):
     assert exc_info.value.status_code == 403
     assert "Failed to persist authorization denial audit event" in caplog.text
     assert "database unavailable" not in caplog.text
+
+
+def test_require_roles_still_denies_when_audit_insert_raises_runtime_error(
+    caplog,
+):
+    audit_events = Mock()
+    audit_events.insert_one.side_effect = RuntimeError(
+        "sensitive storage diagnostic"
+    )
+    request = SimpleNamespace(
+        method="POST",
+        url=SimpleNamespace(path="/api/v1/predictions"),
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                db=SimpleNamespace(audit_events=audit_events)
+            )
+        ),
+    )
+    dependency = require_roles("analyst")
+
+    with pytest.raises(HTTPException) as exc_info:
+        dependency(
+            request=request,
+            claims={"sub": "actor-id", "role": "viewer"},
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "Insufficient permissions."
+    assert "Failed to persist authorization denial audit event" in caplog.text
+    assert "sensitive storage diagnostic" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "database",
+    [
+        None,
+        SimpleNamespace(),
+        SimpleNamespace(audit_events=None),
+    ],
+)
+def test_require_roles_still_denies_when_audit_collection_is_missing(
+    database,
+    caplog,
+):
+    request = SimpleNamespace(
+        method="POST",
+        url=SimpleNamespace(path="/api/v1/predictions"),
+        app=SimpleNamespace(state=SimpleNamespace(db=database)),
+    )
+    dependency = require_roles("analyst")
+
+    with pytest.raises(HTTPException) as exc_info:
+        dependency(
+            request=request,
+            claims={"sub": "actor-id", "role": "viewer"},
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "Insufficient permissions."
+    assert "Failed to persist authorization denial audit event" in caplog.text

@@ -178,12 +178,29 @@ def require_roles(*allowed_roles: str):
                 "request_path": request.url.path,
                 "denial_reason": "role_not_allowed",
             }
-            try:
-                request.app.state.db.audit_events.insert_one(event)
-            except PyMongoError:
+            database = getattr(request.app.state, "db", None)
+            audit_events = (
+                getattr(database, "audit_events", None)
+                if database is not None
+                else None
+            )
+            insert_audit_event = (
+                getattr(audit_events, "insert_one", None)
+                if audit_events is not None
+                else None
+            )
+
+            if not callable(insert_audit_event):
                 logger.error(
                     "Failed to persist authorization denial audit event"
                 )
+            else:
+                try:
+                    insert_audit_event(event)
+                except Exception:
+                    logger.error(
+                        "Failed to persist authorization denial audit event"
+                    )
 
             raise HTTPException(
                 status_code=403,
