@@ -1,0 +1,16 @@
+{
+  "dataset_name": "canonical-csv",
+  "reviewed": true,
+  "review_notes": "Identity mapping for CSV files that already use the canonical v1.0.0 column names plus a 'label' column.",
+  "license_note": "n/a - applies to whatever canonical-format file the operator supplies.",
+  "label_column": "label",
+  "benign_labels": ["benign"],
+  "fields": {
+    "duration": {"column": "duration"}, "protocol": {"column": "protocol"},
+    "source_port": {"column": "source_port"}, "destination_port": {"column": "destination_port"},
+    "flow_packets": {"column": "flow_packets"}, "flow_bytes": {"column": "flow_bytes"},
+    "packets_per_second": {"column": "packets_per_second"}, "bytes_per_second": {"column": "bytes_per_second"},
+    "connection_state": {"column": "connection_state"}, "direction": {"column": "direction"},
+    "observed_at": {"column": "observed_at"}, "source_id": {"column": "source_id"}
+  }
+}

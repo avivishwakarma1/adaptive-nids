@@ -1,0 +1,61 @@
+# Local secrets and environment files
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Python environments and generated files
+.venv/
+.venv311/
+venv/
+ENV/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.coverage
+.coverage.*
+htmlcov/
+
+# JavaScript dependencies and build output
+node_modules/
+dist/
+coverage/
+
+# Generated model artifacts and local runtime state
+/artifacts/
+/model_artifacts/
+/ml/artifacts/
+/backend/var/artifacts/
+/backend/var/models/
+var/
+*.pkl
+*.joblib
+*.onnx
+*.pt
+*.pth
+*.safetensors
+
+# Training runs, logs, and generated API snapshots
+runs/
+logs/
+*.log
+/openapi.json
+
+# Local datasets and packet captures
+/data/
+datasets/
+*.pcap
+*.pcapng
+
+# Operating system files
+.DS_Store
+Thumbs.db
+desktop.ini
